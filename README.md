@@ -88,3 +88,9 @@ Run the unit tests using:
 
 ```bash
 ./gradlew test
+```
+
+
+## License
+
+This project is licensed under the [MIT License](https://github.com/adampawelczyk/GitHub-Repository/blob/master/LICENSE).
