@@ -1,121 +1,295 @@
 package com.example.githubrepository.service;
 
-import com.example.githubrepository.exception.UserNotFoundException;
+import com.example.githubrepository.config.TestConfig;
 import com.example.githubrepository.model.Branch;
-import com.example.githubrepository.model.Commit;
-import com.example.githubrepository.model.Owner;
 import com.example.githubrepository.model.RepositoryInfo;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.MockResponse;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import com.github.tomakehurst.wiremock.http.Fault;
+import com.github.tomakehurst.wiremock.junit5.WireMockTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.web.reactive.server.WebTestClient;
 
-import java.io.IOException;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
+
+@SpringBootTest(webEnvironment = RANDOM_PORT)
+@WireMockTest(httpPort = 8080)
+@ContextConfiguration(classes = TestConfig.class)
 public class GitHubRepositoryServiceTest {
 
-    private MockWebServer mockWebServer;
-    private GitHubRepositoryService gitHubRepositoryService;
+    @Autowired
+    private WebTestClient webTestClient;
 
-    @BeforeEach
-    void setUp() {
-        try {
-            mockWebServer = new MockWebServer();
-            mockWebServer.start();
+    @Test
+    void testListUserRepositories() {
+        final String username = "testUser";
+        final String repositoryName = "testRepository";
+        final String branchName = "testBranch";
+        final String commitSha = "commit-sha";
 
-            WebClient webClient = WebClient.builder()
-                    .baseUrl(mockWebServer.url("").toString())
-                    .build();
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + repositoryName + "\",\"owner\":{\"login\":\"" + username +"\"},\"fork\":false}]")));
 
-            gitHubRepositoryService = new GitHubRepositoryService(webClient);
-        } catch (IOException e) {
-            System.err.println("Failed to start MockWebServer: " + e.getMessage());
-        } catch (Exception e) {
-            System.err.println("An unexpected error occurred during setup: " + e.getMessage());
-        }
-    }
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/testRepository/branches"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + branchName + "\",\"commit\":{\"sha\":\"" + commitSha + "\"}}]")));
 
-    @AfterEach
-    void tearDown() {
-        try {
-            mockWebServer.shutdown();
-        } catch (IOException e) {
-            System.err.println("Failed to shut down MockWebServer: " + e.getMessage());
-        } catch (Exception e) {
-            System.err.println("An unexpected error occurred during test teardown: " + e.getMessage());
-        }
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.size() == 1;
+                    RepositoryInfo repository = repositories.getFirst();
+                    assert repositoryName.equals(repository.name());
+                    assert username.equals(repository.owner().login());
+                    assert !repository.fork();
+                    assert repository.branches().size() == 1;
+                    Branch branch = repository.branches().getFirst();
+                    assert branchName.equals(branch.name());
+                    assert commitSha.equals(branch.commit().sha());
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryName + "/branches")));
     }
 
     @Test
-    void testGetUserRepositories() {
-        String username = "testUsername";
-        String repositoriesResponse = "[{\"name\":\"testRepository\",\"owner\":{\"login\":\"testUsername\"},\"fork\":false}]";
+    void testListUserRepositoriesUserNotFound() {
+        final String username = "testUser";
 
-        mockWebServer.enqueue(new MockResponse()
-                .setBody(repositoriesResponse)
-                .addHeader("Content-Type", "application/json"));
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withStatus(404)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"User with '" + username + "' username wasn't found\"}")));
 
-        String branchesResponse = "[{\"name\":\"main\",\"commit\":{\"sha\":\"commit-sha\"}}]";
-        mockWebServer.enqueue(new MockResponse()
-                .setBody(branchesResponse)
-                .addHeader("Content-Type", "application/json"));
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("404")
+                .jsonPath("$.message").isEqualTo("User with '" + username + "' username wasn't found");
 
-        Mono<List<RepositoryInfo>> result = gitHubRepositoryService.getUserRepositories(username);
-
-        StepVerifier.create(result)
-                .expectNext(Collections.singletonList(
-                        new RepositoryInfo("testRepository", new Owner("testUsername"),
-                                Collections.singletonList(new Branch("main", new Commit("commit-sha"))),
-                                false)))
-                .verifyComplete();
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
     }
 
     @Test
-    void testGetUserRepositoriesUserNotFound() {
-        String username = "nonexistent";
+    void testListUserRepositoriesOnlyNonForked() {
+        final String username = "testUser";
+        final String[] repositoryNames = {"nonForked", "forked"};
+        final String branchName = "testBranch";
+        final String commitSha = "commit-sha";
 
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(404)
-                .setBody("{\"message\":\"User with 'nonexistent' username wasn't found\"}")
-                .addHeader("Content-Type", "application/json"));
-
-        Mono<List<RepositoryInfo>> result = gitHubRepositoryService.getUserRepositories(username);
-
-        StepVerifier.create(result)
-                .expectError(UserNotFoundException.class)
-                .verify();
-    }
-
-    @Test
-    void testGetUserRepositoriesOnlyNonForked() {
-        String username = "testUsername";
         String repositoriesResponse = "["
-                + "{\"name\":\"nonForkedRepository\",\"owner\":{\"login\":\"testUsername\"},\"fork\":false},"
-                + "{\"name\":\"forkedRepository\",\"owner\":{\"login\":\"testUsername\"},\"fork\":true}"
+                + "{\"name\":\"" + repositoryNames[0] + "\",\"owner\":{\"login\":\"" + username + "\"},\"fork\":false},"
+                + "{\"name\":\"" + repositoryNames[1] + "\",\"owner\":{\"login\":\"" + username + "\"},\"fork\":true}"
                 + "]";
 
-        mockWebServer.enqueue(new MockResponse()
-                .setBody(repositoriesResponse)
-                .addHeader("Content-Type", "application/json"));
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(repositoriesResponse)));
 
-        String branchesResponse = "[{\"name\":\"main\",\"commit\":{\"sha\":\"commit-sha\"}}]";
-        mockWebServer.enqueue(new MockResponse()
-                .setBody(branchesResponse)
-                .addHeader("Content-Type", "application/json"));
+        String branchesResponse = "[{\"name\":\"" + branchName + "\",\"commit\":{\"sha\":\"" + commitSha + "\"}}]";
 
-        Mono<List<RepositoryInfo>> result = gitHubRepositoryService.getUserRepositories(username);
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[0] + "/branches"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(branchesResponse)));
 
-        StepVerifier.create(result)
-                .expectNext(Collections.singletonList(
-                        new RepositoryInfo("nonForkedRepository", new Owner("testUsername"),
-                                Collections.singletonList(new Branch("main", new Commit("commit-sha"))),
-                                false)))
-                .verifyComplete();
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.size() == 1;
+                    RepositoryInfo repository = repositories.getFirst();
+                    assert repositoryNames[0].equals(repository.name());
+                    assert username.equals(repository.owner().login());
+                    assert !repository.fork();
+                    assert repository.branches().size() == 1;
+                    Branch branch = repository.branches().getFirst();
+                    assert branchName.equals(branch.name());
+                    assert commitSha.equals(branch.commit().sha());
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[0] + "/branches")));
+    }
+
+    @Test
+    void testListUserRepositoriesEmptyList() {
+        final String username = "testUser";
+
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[]")));
+
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.isEmpty();
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+    }
+
+    @Test
+    void testListUserRepositoriesWithNoBranches() {
+        final String username = "testUser";
+        final String repositoryName = "testRepository";
+
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + repositoryName + "\",\"owner\":{\"login\":\"" + username + "\"},\"fork\":false}]")));
+
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/" + repositoryName + "/branches"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[]")));
+
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.size() == 1;
+                    RepositoryInfo repository = repositories.getFirst();
+                    assert repositoryName.equals(repository.name());
+                    assert username.equals(repository.owner().login());
+                    assert !repository.fork();
+                    assert repository.branches().isEmpty();
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryName + "/branches")));
+    }
+
+    @Test
+    void testListUserRepositoriesPartialBranchRetrievalFailure() {
+        final String username = "testUser";
+        final String[] repositoryNames = {"testRepository1", "testRepository2"};
+        final String branchName = "testBranch";
+
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + repositoryNames[0] + "\",\"owner\":{\"login\":\"" + username +
+                                "\"},\"fork\":false},{\"name\":\"" + repositoryNames[1] + "\",\"owner\":{\"login\":\""
+                                + username + "\"},\"fork\":false}]")));
+
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[0] + "/branches"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + branchName + "\",\"commit\":{\"sha\":\"commit-sha1\"}}]")));
+
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[1] + "/branches"))
+                .willReturn(aResponse()
+                        .withStatus(500)));
+
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.size() == 2;
+
+                    repositories.sort(Comparator.comparing(RepositoryInfo::name));
+
+                    RepositoryInfo repo1 = repositories.getFirst();
+                    assert repositoryNames[0].equals(repo1.name());
+                    assert username.equals(repo1.owner().login());
+                    assert !repo1.fork();
+                    assert repo1.branches().size() == 1;
+                    assert branchName.equals(repo1.branches().getFirst().name());
+
+                    RepositoryInfo repo2 = repositories.get(1);
+                    assert repositoryNames[1].equals(repo2.name());
+                    assert username.equals(repo2.owner().login());
+                    assert !repo2.fork();
+                    assert repo2.branches().isEmpty();
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[0] + "/branches")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryNames[1] + "/branches")));
+    }
+
+    @Test
+    void testListUserRepositoriesBranchRetrievalNon200Response() {
+        final String username = "testUser";
+        final String repositoryName = "testRepository";
+
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[{\"name\":\"" + repositoryName + "\",\"owner\":{\"login\":\"" + username + "\"},\"fork\":false}]")));
+
+        stubFor(get(urlPathEqualTo("/repos/" + username + "/" + repositoryName + "/branches"))
+                .willReturn(aResponse()
+                        .withStatus(403)));
+
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(RepositoryInfo.class)
+                .consumeWith(response -> {
+                    List<RepositoryInfo> repositories = response.getResponseBody();
+                    assert repositories != null;
+                    assert repositories.size() == 1;
+
+                    RepositoryInfo repo = repositories.getFirst();
+                    assert repositoryName.equals(repo.name());
+                    assert username.equals(repo.owner().login());
+                    assert !repo.fork();
+                    assert repo.branches().isEmpty();
+                });
+
+        verify(getRequestedFor(urlPathEqualTo("/users/" + username + "/repos")));
+        verify(getRequestedFor(urlPathEqualTo("/repos/" + username + "/" + repositoryName + "/branches")));
+    }
+
+    @Test
+    void testListUserRepositoriesNetworkError() {
+        String username = "testUser";
+
+        stubFor(get(urlPathEqualTo("/users/" + username + "/repos"))
+                .willReturn(aResponse()
+                        .withFault(Fault.CONNECTION_RESET_BY_PEER)));
+
+        webTestClient.get()
+                .uri("/api/github/users/{username}/repositories", username)
+                .exchange()
+                .expectStatus().is5xxServerError();
     }
 }
