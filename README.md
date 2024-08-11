@@ -15,9 +15,9 @@ This Spring Boot application provides a RESTful API to retrieve non-forked repos
 - Spring Boot 3.3.2
 - Spring WebFlux
 - Project Reactor
-- Mockito (for testing)
+- WireMock (for testing)
 - JUnit 5 (for testing)
-- MockWebServer (for testing)
+- AssertJ (for testing)
 
 ## Installation
 
@@ -48,27 +48,29 @@ This Spring Boot application provides a RESTful API to retrieve non-forked repos
 
 #### Response
 
-Returns a JSON array of `RepositoryInfo` objects.
+Returns a JSON object containing a repositories field, which is an array of `RepositoryDto` objects.
 
 Example:
 ```json
-[
-  {
-    "name": "repositoryName",
-    "owner": {
-      "login": "ownerUsername"
-    },
-    "branches": [
-      {
-        "name": "branchName",
-        "commit": {
-          "sha": "commitSha"
+{
+  "repositories": [
+    {
+      "name": "repositoryName",
+      "owner": {
+        "login": "ownerUsername"
+      },
+      "branches": [
+        {
+          "name": "branchName",
+          "commit": {
+            "sha": "commitSha"
+          }
         }
-      }
-    ],
-    "fork": false
-  }
-]
+      ],
+      "fork": false
+    }
+  ]
+}
 ```
 #### Error Responses
 
@@ -77,14 +79,86 @@ Example:
 Example:
 ```json
 {
-    "message": "User with 'exampleUsername' username wasn't found",
+    "message": "User not found",
     "status": "404"
+}
+```
+
+<br>
+
+- `403 Forbidden`: If access to the requested resource is denied.
+
+Example:
+```json
+{
+    "message": "Access denied",
+    "status": "403"
+}
+```
+
+<br>
+
+- `400 Bad Request`: If the request is invalid.
+
+Example:
+```json
+{
+    "message": "Bad request",
+    "status": "400"
+}
+```
+
+<br>
+
+- `Generic Client Error`: For any other client-side errors (4xx).
+
+Example:
+```json
+{
+    "message": "Client error: <error_message>",
+    "status": "4xx"
+}
+```
+
+<br>
+
+- `500 Internal Server Error`: Indicates a failure to retrieve branches for a specific repository due to an unexpected server-side issue.
+
+Example:
+```json
+{
+    "message": "Failed to retrieve branches for repository: <repositoryName>",
+    "status": "500"
+}
+```
+
+<br>
+
+- `503 Service Unavailable`: If the service is temporarily unavailable.
+
+Example:
+```json
+{
+    "message": "Service unavailable",
+    "status": "503"
+}
+```
+
+<br>
+
+- `Generic Server Error`: For any other server-side errors (5xx).
+
+Example:
+```json
+{
+    "message": "Server error: <error_message>",
+    "status": "5xx"
 }
 ```
 
 ## Testing
 
-Run the unit tests using:
+Run the tests using:
 
 ```bash
 ./gradlew test
