@@ -5,44 +5,45 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
-import java.util.HashMap;
-import java.util.Map;
-
 @ControllerAdvice
 public class GlobalExceptionHandler {
     @ExceptionHandler(UserNotFoundException.class)
-    public ResponseEntity<Map<String, String>> handleUserNotFoundException(UserNotFoundException e) {
-        Map<String, String> response = new HashMap<>();
-        response.put("status", String.valueOf(HttpStatus.NOT_FOUND.value()));
-        response.put("message", e.getMessage());
-
-        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
+    public ResponseEntity<ErrorResponse> handleUserNotFoundException(UserNotFoundException e) {
+        return buildErrorResponse(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<Map<String, String>> handleAccessDeniedException(AccessDeniedException e) {
-        Map<String, String> response = new HashMap<>();
-        response.put("status", String.valueOf(HttpStatus.FORBIDDEN.value()));
-        response.put("message", e.getMessage());
-
-        return new ResponseEntity<>(response, HttpStatus.FORBIDDEN);
+    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException e) {
+        return buildErrorResponse(HttpStatus.FORBIDDEN, e.getMessage());
     }
 
     @ExceptionHandler(BadRequestException.class)
-    public ResponseEntity<Map<String, String>> handleBadRequestException(BadRequestException e) {
-        Map<String, String> response = new HashMap<>();
-        response.put("status", String.valueOf(HttpStatus.BAD_REQUEST.value()));
-        response.put("message", e.getMessage());
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    public ResponseEntity<ErrorResponse> handleBadRequestException(BadRequestException e) {
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
     @ExceptionHandler(ServiceUnavailableException.class)
-    public ResponseEntity<Map<String, String>> handleServiceUnavailableException(ServiceUnavailableException e) {
-        Map<String, String> response = new HashMap<>();
-        response.put("status", String.valueOf(HttpStatus.SERVICE_UNAVAILABLE.value()));
-        response.put("message", e.getMessage());
+    public ResponseEntity<ErrorResponse> handleServiceUnavailableException(ServiceUnavailableException e) {
+        return buildErrorResponse(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+    }
 
-        return new ResponseEntity<>(response, HttpStatus.SERVICE_UNAVAILABLE);
+    @ExceptionHandler(BranchRetrievalException.class)
+    public ResponseEntity<ErrorResponse> handleBranchRetrievalException(BranchRetrievalException e) {
+        return buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage());
+    }
+
+    @ExceptionHandler(ClientErrorException.class)
+    public ResponseEntity<ErrorResponse> handleClientErrorException(ClientErrorException e) {
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    @ExceptionHandler(ServerErrorException.class)
+    public ResponseEntity<ErrorResponse> handleServerErrorException(ServerErrorException e) {
+        return buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage());
+    }
+
+    private ResponseEntity<ErrorResponse> buildErrorResponse(HttpStatus status, String message) {
+        ErrorResponse errorResponse = new ErrorResponse(status.value(), message);
+        return new ResponseEntity<>(errorResponse, status);
     }
 }

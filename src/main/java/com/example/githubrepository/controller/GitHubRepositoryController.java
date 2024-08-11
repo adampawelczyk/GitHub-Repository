@@ -1,8 +1,8 @@
 package com.example.githubrepository.controller;
 
-import com.example.githubrepository.model.RepositoryInfo;
+import com.example.githubrepository.dto.RepositoryDto;
+import com.example.githubrepository.dto.RepositoryDtoArray;
 import com.example.githubrepository.service.GitHubRepositoryService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,11 +15,14 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/github")
 public class GitHubRepositoryController {
-    @Autowired
-    private GitHubRepositoryService gitHubRepositoryService;
+    private final GitHubRepositoryService gitHubRepositoryService;
+
+    GitHubRepositoryController(GitHubRepositoryService service) {
+        this.gitHubRepositoryService = service;
+    }
 
     @GetMapping("/users/{username}/repositories")
-    public Mono<ResponseEntity<List<RepositoryInfo>>> listUserRepositories(@PathVariable String username) {
+    public Mono<ResponseEntity<RepositoryDtoArray>> listUserRepositories(@PathVariable String username) {
         return gitHubRepositoryService.getUserRepositories(username)
                 .map(repositories -> ResponseEntity.ok().body(repositories));
     }
